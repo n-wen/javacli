@@ -1,0 +1,35 @@
+{
+  "name": "javacli",
+  "version": "1.0.0",
+  "description": "Java SpringBoot项目分析CLI工具",
+  "main": "src/index.js",
+  "bin": {
+    "javacli": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "build": "npm install -g .",
+    "test": "echo \"测试功能暂未实现\" && exit 1"
+  },
+  "keywords": [
+    "java",
+    "springboot",
+    "cli",
+    "analysis",
+    "endpoints",
+    "rest-api"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.0.0",
+    "sqlite3": "^5.1.7",
+    "blessed": "^0.1.81",
+    "chalk": "^5.3.0",
+    "glob": "^10.3.10"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
