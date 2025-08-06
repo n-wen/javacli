@@ -24,7 +24,7 @@ let useSimpleUI = false;
 
 program
   .name('javacli')
-  .description('Java SpringBoot项目分析CLI工具')
+  .description('Java Spring项目分析CLI工具')
   .version('1.0.0')
   .option('-p, --path <path>', 'Java项目路径 (默认为当前目录)')
   .option('-v, --verbose', '显示详细信息')

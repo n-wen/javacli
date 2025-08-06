@@ -5,7 +5,7 @@ const path = require('path');
  * 表示一个HTTP endpoint
  */
 class Endpoint {
-  constructor(method, path, className, methodName, filePath, lineNumber, parameters = []) {
+  constructor(method, path, className, methodName, filePath, lineNumber, parameters = [], moduleName = null) {
     this.method = method;
     this.path = path;
     this.className = className;
@@ -13,21 +13,25 @@ class Endpoint {
     this.filePath = filePath;
     this.lineNumber = lineNumber;
     this.parameters = parameters;
+    this.moduleName = moduleName; // 新增：所属模块名称
   }
 }
 
 /**
- * 分析Java文件中的endpoints
+ * 分析Java文件中的endpoints（支持模块信息）
  * @param {string[]} javaFiles Java文件路径数组
+ * @param {Object} moduleInfo 模块信息
  * @returns {Promise<{endpoints: Endpoint[], controllerCount: number}>} 分析结果
  */
-async function analyzeEndpoints(javaFiles) {
+async function analyzeEndpoints(javaFiles, moduleInfo = null) {
   const endpoints = [];
   let controllerCount = 0;
 
   for (const filePath of javaFiles) {
     try {
-      const { endpoints: fileEndpoints, isController } = await analyzeJavaFile(filePath);
+      // 确定文件所属的模块
+      const moduleName = getModuleForFile(filePath, moduleInfo);
+      const { endpoints: fileEndpoints, isController } = await analyzeJavaFile(filePath, moduleName);
       endpoints.push(...fileEndpoints);
       if (isController) {
         controllerCount++;
@@ -42,11 +46,32 @@ async function analyzeEndpoints(javaFiles) {
 }
 
 /**
+ * 根据文件路径确定所属模块
+ * @param {string} filePath 文件路径
+ * @param {Object} moduleInfo 模块信息
+ * @returns {string|null} 模块名称
+ */
+function getModuleForFile(filePath, moduleInfo) {
+  if (!moduleInfo || !moduleInfo.isMultiModule) {
+    return null;
+  }
+
+  for (const module of moduleInfo.modules) {
+    if (filePath.startsWith(module.path)) {
+      return module.name;
+    }
+  }
+
+  return null;
+}
+
+/**
  * 分析单个Java文件
  * @param {string} filePath 文件路径
+ * @param {string|null} moduleName 模块名称
  * @returns {Promise<{endpoints: Endpoint[], isController: boolean}>} 分析结果
  */
-async function analyzeJavaFile(filePath) {
+async function analyzeJavaFile(filePath, moduleName = null) {
   const endpoints = [];
   
   try {
@@ -124,7 +149,8 @@ async function analyzeJavaFile(filePath) {
           methodName,
           filePath,
           i + 1, // mapping注解的行号（1-based）
-          parameters
+          parameters,
+          moduleName // 包含模块信息
         );
 
         endpoints.push(endpoint);
@@ -213,6 +239,7 @@ module.exports = {
   Endpoint,
   analyzeEndpoints,
   analyzeJavaFile,
+  getModuleForFile,
   parseParameters,
   buildFullPath,
   ensureLeadingSlash

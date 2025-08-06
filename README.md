@@ -1,6 +1,6 @@
-# JavaCLI - Java SpringBoot项目分析工具
+# JavaCLI - Java Spring项目分析工具
 
-一个基于Node.js的交互式Java SpringBoot项目分析工具，提供美观的终端用户界面(TUI)来浏览和分析项目中的HTTP endpoints。
+一个基于Node.js的交互式Java Spring项目分析工具，提供美观的终端用户界面(TUI)来浏览和分析项目中的HTTP endpoints。支持SpringBoot和传统Spring框架项目。
 
 ## 功能特性
 
@@ -8,12 +8,15 @@
 - 🔍 **实时搜索过滤** - 按方法、路径、控制器名称搜索
 - ⌨️ **键盘导航** - 使用方向键轻松浏览endpoints
 - 📊 **静态分析** - 智能分析Java源码
-- 🌐 **自动检测** - 识别SpringBoot项目结构
+- 🌐 **自动检测** - 识别Spring/SpringBoot项目结构
 - 📋 **详细视图** - 查看endpoint完整信息
 - 🎨 **彩色输出** - 直观的颜色编码
 - 📄 **智能分页** - 自动适应终端大小，支持大量endpoints
 - 🔄 **快速滚动** - 支持翻页、首尾跳转等快捷导航
 - 💾 **智能缓存** - SQLite本地索引，提升重复分析性能
+- 🏗️ **多模块支持** - 支持Maven/Gradle多模块项目结构
+- 📦 **模块感知** - 在界面中显示每个endpoint所属的模块
+- 🔄 **框架兼容** - 同时支持SpringBoot和传统Spring框架
 
 ## 支持的注解
 
@@ -193,10 +196,32 @@ npm start
 - **自动更新**: 检测到Java文件变化时自动重新扫描
 - **手动清理**: 使用 `-f` 参数强制重新扫描
 
+## 项目类型支持
+
+### 通用Java项目
+- 支持任何包含Java文件的项目，无需pom.xml或build.gradle
+- 自动扫描所有.java文件中的Spring注解
+- 兼容传统项目结构
+
+### SpringBoot项目
+- 自动检测SpringBoot依赖
+- 支持所有SpringBoot注解
+- 识别application.properties/yml配置
+
+### 传统Spring项目  
+- 检测Spring Web MVC依赖
+- 支持Spring框架注解
+- 识别XML配置文件（applicationContext.xml等）
+
+### 多模块项目
+- Maven多模块项目（父pom + 子模块）
+- Gradle多模块项目（settings.gradle + 子项目）
+- 自动识别包含Spring的模块
+
 ## 注意事项
 
-- 目前只支持基于注解的SpringBoot控制器
-- 不支持XML配置的endpoints
+- 目前只支持基于注解的Spring控制器
+- 暂不支持XML配置的endpoints（计划支持）
 - 复杂的路径变量可能无法完全识别
 - 需要Java源码文件（不分析编译后的.class文件）
 - 需要Node.js 16.0.0或更高版本

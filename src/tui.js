@@ -18,6 +18,7 @@ class TUI {
     this.isSearchMode = false;
     this.isDetailMode = false;
     this.currentDetailIndex = 0;
+    this.moduleInfo = null; // 新增：模块信息
     
     this.setupScreen();
     this.setupComponents();
@@ -30,7 +31,7 @@ class TUI {
   setupScreen() {
     this.screen = blessed.screen({
       smartCSR: true,
-      title: 'JavaCLI - SpringBoot项目分析工具',
+      title: 'JavaCLI - Spring项目分析工具',
       fullUnicode: true,
       dockBorders: true,
       ignoreLocked: ['C-c'],
@@ -49,7 +50,7 @@ class TUI {
       left: 0,
       width: '100%',
       height: 3,
-      content: '{center}{bold}JavaCLI - SpringBoot项目分析工具{/bold}{/center}',
+      content: '{center}{bold}JavaCLI - Spring项目分析工具{/bold}{/center}',
       tags: true,
       border: {
         type: 'line'
@@ -227,9 +228,9 @@ class TUI {
    */
   async loadEndpoints() {
     try {
-      // 检查是否是SpringBoot项目
-      if (!Scanner.isSpringBootProject(this.projectPath)) {
-        throw new Error('当前目录不是SpringBoot项目');
+      // 检查是否是Spring项目
+      if (!(await Scanner.isSpringBootProject(this.projectPath))) {
+        throw new Error('当前目录不是Spring项目');
       }
 
       // 尝试加载缓存
@@ -247,11 +248,21 @@ class TUI {
       this.updateInfo('正在扫描Java文件...');
       const startTime = Date.now();
       
-      const javaFiles = await Scanner.scanJavaFiles(this.projectPath);
-      this.updateInfo(`扫描完成，正在分析 ${javaFiles.length} 个Java文件...`);
+      const scanResult = await Scanner.scanJavaFiles(this.projectPath);
+      const { javaFiles, moduleInfo } = scanResult;
       
-      const { endpoints, controllerCount } = await Analyzer.analyzeEndpoints(javaFiles);
+      if (moduleInfo.isMultiModule) {
+        const springModuleCount = moduleInfo.modules.filter(m => m.hasSpringBoot).length;
+        this.updateInfo(`扫描完成，发现 ${moduleInfo.modules.length} 个模块（${springModuleCount} 个包含Spring），正在分析 ${javaFiles.length} 个Java文件...`);
+      } else {
+        this.updateInfo(`扫描完成，正在分析 ${javaFiles.length} 个Java文件...`);
+      }
+      
+      const { endpoints, controllerCount } = await Analyzer.analyzeEndpoints(javaFiles, moduleInfo);
       const duration = Date.now() - startTime;
+      
+      // 保存模块信息供界面使用
+      this.moduleInfo = moduleInfo;
       
       // 生成统计信息并保存索引
       const stats = {
@@ -296,8 +307,16 @@ class TUI {
    */
   updateInfo(message) {
     let content = `📁 项目路径: ${this.projectPath}\n`;
+    
     if (this.endpoints.length > 0) {
       content += `🌐 找到 ${this.endpoints.length} 个HTTP endpoints`;
+      
+      // 如果是多模块项目，显示模块统计
+      if (this.moduleInfo && this.moduleInfo.isMultiModule) {
+        const springModules = this.moduleInfo.modules.filter(m => m.hasSpringBoot);
+        content += ` (${springModules.length} 个模块)`;
+      }
+      
       if (this.searchQuery) {
         content += ` (过滤: ${this.filteredEndpoints.length})`;
       }
@@ -318,7 +337,15 @@ class TUI {
 
     const items = this.filteredEndpoints.map(ep => {
       const methodColor = this.getMethodColor(ep.method);
-      return `${methodColor}${ep.method.padEnd(6)} ${ep.path.padEnd(40)} ${ep.className.padEnd(20)} ${ep.methodName}`;
+      let moduleDisplay = '';
+      
+      // 如果是多模块项目，显示模块信息
+      if (this.moduleInfo && this.moduleInfo.isMultiModule && ep.moduleName) {
+        const moduleName = ep.moduleName.length > 12 ? ep.moduleName.substr(0, 12) + '...' : ep.moduleName;
+        moduleDisplay = `[${moduleName}] `;
+      }
+      
+      return `${methodColor}${ep.method.padEnd(6)} ${ep.path.padEnd(35)} ${moduleDisplay}${ep.className.padEnd(18)} ${ep.methodName}`;
     });
 
     this.listBox.setItems(items);
@@ -407,10 +434,17 @@ class TUI {
     this.currentDetailIndex = this.listBox.selected;
     const endpoint = this.filteredEndpoints[this.currentDetailIndex];
 
-    const content = `Endpoint详情 (${this.currentDetailIndex + 1}/${this.filteredEndpoints.length})
+    let content = `Endpoint详情 (${this.currentDetailIndex + 1}/${this.filteredEndpoints.length})
 
 🌐 HTTP方法: ${endpoint.method}
-📍 路径: ${endpoint.path}
+📍 路径: ${endpoint.path}`;
+
+    // 如果是多模块项目，显示模块信息
+    if (this.moduleInfo && this.moduleInfo.isMultiModule && endpoint.moduleName) {
+      content += `\n📦 模块: ${endpoint.moduleName}`;
+    }
+
+    content += `
 🏷️  控制器类: ${endpoint.className}
 ⚙️  Java方法: ${endpoint.methodName}()
 📄 文件: ${endpoint.filePath}

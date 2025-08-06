@@ -1,9 +1,3 @@
----
-description:
-globs:
-alwaysApply: true
----
-
 项目说明: 一个command line工具
 
 # 功能说明
