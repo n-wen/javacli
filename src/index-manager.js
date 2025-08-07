@@ -35,7 +35,7 @@ class IndexManager {
    */
   static async generateProjectHash(projectPath) {
     try {
-      const javaFiles = await Scanner.scanJavaFiles(projectPath);
+      const { javaFiles } = await Scanner.scanJavaFiles(projectPath);
       
       const hasher = crypto.createHash('md5');
       hasher.update(projectPath);

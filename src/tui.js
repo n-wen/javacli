@@ -228,9 +228,11 @@ class TUI {
    */
   async loadEndpoints() {
     try {
-      // 检查是否是Spring项目
-      if (!(await Scanner.isSpringBootProject(this.projectPath))) {
-        throw new Error('当前目录不是Spring项目');
+      // 检查是否包含Java文件，支持任何Java项目
+      const scanResult = await Scanner.scanJavaFiles(this.projectPath);
+      const { javaFiles, moduleInfo } = scanResult;
+      if (javaFiles.length === 0) {
+        throw new Error('当前目录未找到Java文件');
       }
 
       // 尝试加载缓存
@@ -248,17 +250,16 @@ class TUI {
       this.updateInfo('正在扫描Java文件...');
       const startTime = Date.now();
       
-      const scanResult = await Scanner.scanJavaFiles(this.projectPath);
-      const { javaFiles, moduleInfo } = scanResult;
+      const allJavaFiles = javaFiles;
       
       if (moduleInfo.isMultiModule) {
         const springModuleCount = moduleInfo.modules.filter(m => m.hasSpringBoot).length;
-        this.updateInfo(`扫描完成，发现 ${moduleInfo.modules.length} 个模块（${springModuleCount} 个包含Spring），正在分析 ${javaFiles.length} 个Java文件...`);
+        this.updateInfo(`扫描完成，发现 ${moduleInfo.modules.length} 个模块（${springModuleCount} 个包含Spring），正在分析 ${allJavaFiles.length} 个Java文件...`);
       } else {
-        this.updateInfo(`扫描完成，正在分析 ${javaFiles.length} 个Java文件...`);
+        this.updateInfo(`扫描完成，正在分析 ${allJavaFiles.length} 个Java文件...`);
       }
       
-      const { endpoints, controllerCount } = await Analyzer.analyzeEndpoints(javaFiles, moduleInfo);
+      const { endpoints, controllerCount } = await Analyzer.analyzeEndpoints(allJavaFiles, moduleInfo);
       const duration = Date.now() - startTime;
       
       // 保存模块信息供界面使用
@@ -268,7 +269,7 @@ class TUI {
       const stats = {
         totalEndpoints: endpoints.length,
         methodCounts: this.calculateMethodCounts(endpoints),
-        totalJavaFiles: javaFiles.length,
+        totalJavaFiles: allJavaFiles.length,
         controllerFiles: controllerCount,
         scanDurationMs: duration
       };
