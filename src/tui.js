@@ -15,8 +15,10 @@ class TUI {
     this.filteredEndpoints = [];
     this.selectedIndex = 0;
     this.searchQuery = '';
+    this.moduleFilter = null;
     this.isSearchMode = false;
     this.isDetailMode = false;
+    this.isModuleFilterMode = false;
     this.currentDetailIndex = 0;
     this.moduleInfo = null; // 新增：模块信息
     
@@ -116,7 +118,7 @@ class TUI {
       left: 0,
       width: '100%',
       height: 3,
-      content: '↑/↓: 导航  Enter: 详情  /: 搜索  r: 重新扫描  q: 退出',
+      content: '↑/↓: 导航  Enter: 详情  /: 搜索  m: 模块过滤  c: 清除  r: 重新扫描  h: 帮助  q: 退出',
       border: {
         type: 'line'
       },
@@ -178,10 +180,31 @@ class TUI {
       }
     });
 
+    // 模块过滤
+    this.screen.key('m', () => {
+      if (!this.isDetailMode) {
+        this.startModuleFilter();
+      }
+    });
+
+    // 清除模块过滤
+    this.screen.key('c', () => {
+      if (!this.isDetailMode) {
+        this.clearModuleFilter();
+      }
+    });
+
     // 重新扫描
     this.screen.key('r', async () => {
       if (!this.isDetailMode) {
         await this.rescan();
+      }
+    });
+
+    // 帮助信息
+    this.screen.key('h', () => {
+      if (!this.isDetailMode) {
+        this.showHelp();
       }
     });
 
@@ -287,9 +310,12 @@ class TUI {
    * 从缓存加载endpoints
    */
   async loadFromCache() {
-    // 这里需要实现从IndexManager加载分页数据的逻辑
-    // 暂时返回空数组，实际项目中需要完善
-    return [];
+    try {
+      return await IndexManager.loadIndex(this.projectPath);
+    } catch (error) {
+      console.warn(`从缓存加载失败: ${error.message}`);
+      return [];
+    }
   }
 
   /**
@@ -318,8 +344,16 @@ class TUI {
         content += ` (${springModules.length} 个模块)`;
       }
       
+      const filters = [];
       if (this.searchQuery) {
-        content += ` (过滤: ${this.filteredEndpoints.length})`;
+        filters.push(`搜索: ${this.searchQuery}`);
+      }
+      if (this.moduleFilter) {
+        filters.push(`模块: ${this.moduleFilter}`);
+      }
+      
+      if (filters.length > 0) {
+        content += ` (${filters.join(', ')})`;
       }
     } else {
       content += message;
@@ -332,16 +366,27 @@ class TUI {
    * 更新列表
    */
   updateList() {
-    this.filteredEndpoints = this.searchQuery 
-      ? this.filterEndpoints(this.endpoints, this.searchQuery)
-      : this.endpoints;
+    this.filteredEndpoints = this.endpoints.filter(ep => {
+      let matchSearch = true;
+      let matchModule = true;
+      
+      if (this.searchQuery) {
+        matchSearch = this.filterEndpoints([ep], this.searchQuery).length > 0;
+      }
+      
+      if (this.moduleFilter) {
+        matchModule = ep.moduleName === this.moduleFilter;
+      }
+      
+      return matchSearch && matchModule;
+    });
 
     const items = this.filteredEndpoints.map(ep => {
       const methodColor = this.getMethodColor(ep.method);
       let moduleDisplay = '';
       
-      // 如果是多模块项目，显示模块信息
-      if (this.moduleInfo && this.moduleInfo.isMultiModule && ep.moduleName) {
+      // 显示模块信息（包括单模块项目）
+      if (ep.moduleName) {
         const moduleName = ep.moduleName.length > 12 ? ep.moduleName.substr(0, 12) + '...' : ep.moduleName;
         moduleDisplay = `[${moduleName}] `;
       }
@@ -376,7 +421,8 @@ class TUI {
       ep.method.toLowerCase().includes(lowerQuery) ||
       ep.path.toLowerCase().includes(lowerQuery) ||
       ep.className.toLowerCase().includes(lowerQuery) ||
-      ep.methodName.toLowerCase().includes(lowerQuery)
+      ep.methodName.toLowerCase().includes(lowerQuery) ||
+      (ep.moduleName && ep.moduleName.toLowerCase().includes(lowerQuery))
     );
   }
 
@@ -440,8 +486,8 @@ class TUI {
 🌐 HTTP方法: ${endpoint.method}
 📍 路径: ${endpoint.path}`;
 
-    // 如果是多模块项目，显示模块信息
-    if (this.moduleInfo && this.moduleInfo.isMultiModule && endpoint.moduleName) {
+    // 显示模块信息
+    if (endpoint.moduleName) {
       content += `\n📦 模块: ${endpoint.moduleName}`;
     }
 
@@ -468,6 +514,73 @@ class TUI {
     this.detailBox.hide();
     this.listBox.focus();
     this.screen.render();
+  }
+
+  /**
+   * 开始模块过滤
+   */
+  startModuleFilter() {
+    // 获取所有唯一的模块名称
+    const modules = [...new Set(this.endpoints.filter(ep => ep.moduleName).map(ep => ep.moduleName))].sort();
+    
+    if (modules.length === 0) {
+      this.updateInfo('当前项目没有模块信息');
+      return;
+    }
+
+    const moduleBox = blessed.list({
+      top: 'center',
+      left: 'center',
+      width: '40%',
+      height: Math.min(modules.length + 4, 15),
+      label: '选择模块 (按Enter确认，Esc取消)',
+      border: {
+        type: 'line'
+      },
+      style: {
+        border: {
+          fg: 'cyan'
+        },
+        selected: {
+          bg: 'blue'
+        }
+      },
+      items: ['全部模块', ...modules],
+      keys: true,
+      vi: true
+    });
+
+    this.screen.append(moduleBox);
+    this.screen.render();
+
+    moduleBox.focus();
+
+    moduleBox.key(['escape'], () => {
+      this.screen.remove(moduleBox);
+      this.screen.render();
+      this.listBox.focus();
+    });
+
+    moduleBox.key(['enter'], () => {
+      const selectedIndex = moduleBox.selected;
+      if (selectedIndex === 0) {
+        this.clearModuleFilter();
+      } else {
+        this.moduleFilter = modules[selectedIndex - 1];
+      }
+      
+      this.screen.remove(moduleBox);
+      this.listBox.focus();
+      this.updateList();
+    });
+  }
+
+  /**
+   * 清除模块过滤
+   */
+  clearModuleFilter() {
+    this.moduleFilter = null;
+    this.updateList();
   }
 
   /**

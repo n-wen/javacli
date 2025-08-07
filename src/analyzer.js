@@ -52,11 +52,18 @@ async function analyzeEndpoints(javaFiles, moduleInfo = null) {
  * @returns {string|null} 模块名称
  */
 function getModuleForFile(filePath, moduleInfo) {
-  if (!moduleInfo || !moduleInfo.isMultiModule) {
+  if (!moduleInfo) {
     return null;
   }
 
-  for (const module of moduleInfo.modules) {
+  // 单模块项目也返回模块名称
+  if (!moduleInfo.isMultiModule && moduleInfo.modules.length > 0) {
+    return moduleInfo.modules[0].name;
+  }
+
+  // 多模块项目 - 按路径长度降序排序，确保优先匹配最具体的子模块
+  const sortedModules = [...moduleInfo.modules].sort((a, b) => b.path.length - a.path.length);
+  for (const module of sortedModules) {
     if (filePath.startsWith(module.path)) {
       return module.name;
     }
@@ -85,9 +92,9 @@ async function analyzeJavaFile(filePath, moduleName = null) {
     // 正则表达式模式
     const classPattern = /class\s+(\w+)/;
     const controllerPattern = /@(RestController|Controller)/;
-    const requestMappingPattern = /@RequestMapping\s*\(\s*["']([^"']*)["']/;
-    const mappingPattern = /@(Get|Post|Put|Delete|Patch)Mapping\s*(?:\(\s*["']([^"']*)["']\s*\))?/;
-    const methodPattern = /(public|private|protected)?\s*\w+\s+(\w+)\s*\(([^)]*)\)/;
+    const requestMappingPattern = /@RequestMapping\s*\([^)]*["']([^"']*)["'][^)]*\)|@RequestMapping\s*\(\s*["']([^"']*)["']\s*\)|@RequestMapping\s*\(\s*\)|@RequestMapping\s*\([^)]*\w+(?:\.\w+)*[^)]*\)/;
+    const mappingPattern = /@(Get|Post|Put|Delete|Patch)Mapping\s*(?:\([^)]*["']([^"']*)["'][^)]*\)|\(\s*["']([^"']*)["']\s*\)|\(\s*\)|\([^)]*\w+(?:\.\w+)*[^)]*\)|$)/;
+    const methodPattern = /(public|private|protected)?\s*(?:\w+(?:<[^>]*>)?(?:\[\])*\s+)*(\w+)\s*\(([^)]*)\)/;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -109,7 +116,18 @@ async function analyzeJavaFile(filePath, moduleName = null) {
       // 提取类级别的RequestMapping路径
       const requestMappingMatch = requestMappingPattern.exec(trimmedLine);
       if (requestMappingMatch) {
-        classBasePath = requestMappingMatch[1];
+        const pathValue = requestMappingMatch[1] || requestMappingMatch[2] || '';
+        if (pathValue) {
+          classBasePath = pathValue;
+        } else {
+          // 处理变量引用的情况，保留原始表达式
+          const variableMatch = /@RequestMapping\s*\(\s*([^)"']+)\s*\)/.exec(trimmedLine);
+          if (variableMatch) {
+            classBasePath = `{${variableMatch[1].trim()}}`;
+          } else {
+            classBasePath = '';
+          }
+        }
         continue;
       }
 
@@ -122,20 +140,64 @@ async function analyzeJavaFile(filePath, moduleName = null) {
       const mappingMatch = mappingPattern.exec(trimmedLine);
       if (mappingMatch) {
         const httpMethod = mappingMatch[1].toUpperCase();
-        const methodPath = mappingMatch[2] || '';
+        let methodPath = mappingMatch[2] || mappingMatch[3] || '';
+        
+        // 如果没有匹配到字符串，检查是否是变量引用
+        if (!methodPath) {
+          const variableMatch = /@(?:Get|Post|Put|Delete|Patch)Mapping\s*\(\s*([^)"']+)\s*\)/.exec(trimmedLine);
+          if (variableMatch) {
+            methodPath = `{${variableMatch[1].trim()}}`;
+          }
+        }
 
-        // 查找下一行的方法定义
+        // 查找方法定义
         let methodName = '';
         let parameters = [];
         
-        if (i + 1 < lines.length) {
-          const nextLine = lines[i + 1].trim();
-          const methodMatch = methodPattern.exec(nextLine);
+        // 从mapping注解后的行开始查找方法定义
+        for (let j = i + 1; j < Math.min(lines.length, i + 3); j++) {
+          const line = lines[j].trim();
+          if (!line || line.startsWith('@') || line.startsWith('//') || line.startsWith('/*')) continue;
+          
+          // 直接匹配方法定义：public/private/protected 返回类型 方法名(参数)
+          const methodMatch = /(?:public|private|protected)?\s+(?:\w+(?:<[^>]*>)?(?:\[\])?\s+)*(\w+)\s*\(/.exec(line);
           if (methodMatch) {
-            methodName = methodMatch[2];
-            if (methodMatch[3]) {
-              parameters = parseParameters(methodMatch[3]);
+            methodName = methodMatch[1];
+            
+            // 提取参数部分
+            const paramStart = line.indexOf('(');
+            const paramEnd = line.lastIndexOf(')');
+            if (paramStart !== -1 && paramEnd !== -1 && paramEnd > paramStart) {
+              // 参数在同一行
+              const paramStr = line.substring(paramStart + 1, paramEnd);
+              parameters = parseParameters(paramStr);
+            } else {
+              // 处理多行参数情况
+              let paramStr = '';
+              let parenCount = 1;
+              
+              // 从当前行的左括号后开始收集参数
+              paramStr += line.substring(paramStart + 1);
+              
+              for (let k = j + 1; k < lines.length && parenCount > 0; k++) {
+                const nextLine = lines[k].trim();
+                const openCount = (nextLine.match(/\(/g) || []).length;
+                const closeCount = (nextLine.match(/\)/g) || []).length;
+                parenCount += openCount - closeCount;
+                
+                if (parenCount > 0) {
+                  paramStr += ' ' + nextLine;
+                } else {
+                  const closeIndex = nextLine.lastIndexOf(')');
+                  if (closeIndex > 0) {
+                    paramStr += ' ' + nextLine.substring(0, closeIndex);
+                  }
+                  break;
+                }
+              }
+              parameters = parseParameters(paramStr);
             }
+            break;
           }
         }
 
@@ -174,16 +236,56 @@ function parseParameters(paramStr) {
     return params;
   }
 
-  // 简单的参数分割，处理基本情况
-  const parts = paramStr.split(',');
+  // 处理复杂的参数定义，包括注解和泛型
+  const parts = [];
+  let current = '';
+  let angleDepth = 0;
+  let parenDepth = 0;
+  
+  // 逐个字符处理，正确处理泛型和嵌套括号
+  for (let i = 0; i < paramStr.length; i++) {
+    const char = paramStr[i];
+    
+    if (char === '<') angleDepth++;
+    else if (char === '>') angleDepth--;
+    else if (char === '(') parenDepth++;
+    else if (char === ')') parenDepth--;
+    
+    if (char === ',' && angleDepth === 0 && parenDepth === 0) {
+      parts.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  
+  if (current.trim()) {
+    parts.push(current.trim());
+  }
+
   for (const part of parts) {
     const trimmed = part.trim();
     if (trimmed) {
-      // 提取参数名（去掉类型和注解）
-      const words = trimmed.split(/\s+/);
+      // 提取参数名，处理各种复杂情况
+      let paramName = trimmed;
+      
+      // 移除注解
+      paramName = paramName.replace(/@\w+(?:\([^)]*\))?/g, '');
+      
+      // 移除泛型部分
+      paramName = paramName.replace(/<[^>]*>/g, '');
+      
+      // 移除数组标记
+      paramName = paramName.replace(/\[\s*\]/g, '');
+      
+      // 提取最后一个单词作为参数名
+      const words = paramName.trim().split(/\s+/);
       if (words.length > 0) {
-        const paramName = words[words.length - 1];
-        params.push(paramName);
+        const lastWord = words[words.length - 1];
+        // 确保是有效的Java标识符
+        if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(lastWord)) {
+          params.push(lastWord);
+        }
       }
     }
   }
@@ -212,9 +314,11 @@ function buildFullPath(basePath, methodPath) {
 
   // 组合路径
   let fullPath = ensureLeadingSlash(basePath);
-  if (!fullPath.endsWith('/') && !methodPath.startsWith('/')) {
+  // 确保路径之间有/分隔
+  if (!fullPath.endsWith('/')) {
     fullPath += '/';
   }
+  // 移除methodPath开头的/避免重复
   fullPath += methodPath.replace(/^\//, '');
 
   return fullPath;

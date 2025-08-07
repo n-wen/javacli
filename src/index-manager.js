@@ -87,7 +87,8 @@ class IndexManager {
             method_name TEXT NOT NULL,
             file_path TEXT NOT NULL,
             line_number INTEGER NOT NULL,
-            parameters TEXT NOT NULL
+            parameters TEXT NOT NULL,
+            module_name TEXT
           )
         `);
 
@@ -148,8 +149,8 @@ class IndexManager {
               insertMetadata.finalize();
 
               const insertEndpoint = db.prepare(`
-                INSERT INTO endpoints (method, path, class_name, method_name, file_path, line_number, parameters)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO endpoints (method, path, class_name, method_name, file_path, line_number, parameters, module_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
               `);
 
               for (const ep of endpoints) {
@@ -160,7 +161,8 @@ class IndexManager {
                   ep.methodName,
                   ep.filePath,
                   ep.lineNumber,
-                  JSON.stringify(ep.parameters)
+                  JSON.stringify(ep.parameters),
+                  ep.moduleName || null
                 );
               }
               insertEndpoint.finalize();
@@ -261,18 +263,85 @@ class IndexManager {
   }
 
   /**
-   * 清除索引文件
+   * 加载索引数据
+   */
+  static async loadIndex(projectPath) {
+    const dbPath = this.getIndexFilePath(projectPath);
+    if (!fs.existsSync(dbPath)) {
+      return [];
+    }
+
+    return new Promise((resolve, reject) => {
+      const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+        if (err) {
+          reject(new Error(`打开数据库失败: ${err.message}`));
+          return;
+        }
+
+        db.all(`
+          SELECT method, path, class_name, method_name, file_path, line_number, parameters, module_name
+          FROM endpoints
+          ORDER BY method, path
+        `, (err, rows) => {
+          db.close();
+          
+          if (err) {
+            reject(new Error(`查询endpoints失败: ${err.message}`));
+          } else {
+            const endpoints = rows.map(row => ({
+              method: row.method,
+              path: row.path,
+              className: row.class_name,
+              methodName: row.method_name,
+              filePath: row.file_path,
+              lineNumber: row.line_number,
+              parameters: JSON.parse(row.parameters),
+              moduleName: row.module_name
+            }));
+            resolve(endpoints);
+          }
+        });
+      });
+    });
+  }
+
+  /**
+   * 清除索引数据（清空表而不是删除数据库文件）
    */
   static async clearIndex(projectPath) {
     const dbPath = this.getIndexFilePath(projectPath);
-    if (fs.existsSync(dbPath)) {
-      try {
-        fs.unlinkSync(dbPath);
-        console.log(`索引文件已删除: ${dbPath}`);
-      } catch (error) {
-        throw new Error(`删除索引文件失败: ${error.message}`);
-      }
+    if (!fs.existsSync(dbPath)) {
+      return;
     }
+
+    return new Promise((resolve, reject) => {
+      const db = new sqlite3.Database(dbPath, (err) => {
+        if (err) {
+          reject(new Error(`打开数据库失败: ${err.message}`));
+          return;
+        }
+
+        db.serialize(() => {
+          db.run('DELETE FROM metadata', (err) => {
+            if (err) {
+              db.close();
+              reject(new Error(`清空metadata表失败: ${err.message}`));
+              return;
+            }
+
+            db.run('DELETE FROM endpoints', (err) => {
+              db.close();
+              if (err) {
+                reject(new Error(`清空endpoints表失败: ${err.message}`));
+              } else {
+                console.log(`索引数据已清空: ${dbPath}`);
+                resolve();
+              }
+            });
+          });
+        });
+      });
+    });
   }
 }
 
