@@ -253,42 +253,95 @@ class TUI {
    */
   async loadEndpoints() {
     try {
-      // 检查是否包含Java文件，支持任何Java项目
-      const scanResult = await Scanner.scanJavaFiles(this.projectPath);
-      const { javaFiles, moduleInfo } = scanResult;
-      if (javaFiles.length === 0) {
-        throw new Error('当前目录未找到Java文件');
-      }
-
-      // 尝试加载缓存
+      // 首先尝试从缓存加载端点
       const metadata = await IndexManager.loadIndexMetadata(this.projectPath);
+      let endpoints = [];
+      
       if (metadata) {
         const isValid = await IndexManager.isIndexValid(this.projectPath, metadata);
         if (isValid) {
-          this.endpoints = await this.loadFromCache();
-          this.updateInfo(`已加载缓存 (${this.endpoints.length}个endpoints)`);
+          endpoints = await this.loadFromCache();
+          this.endpoints = endpoints;
+          this.updateInfo(`已加载缓存 (${endpoints.length}个endpoints)`);
+          this.updateList();
+          this.screen.render();
+          
+          // 缓存有效，直接返回，不再进行后台分析
           return;
         }
       }
 
-      // 扫描和分析项目
-      this.updateInfo('正在扫描Java文件...');
-      const startTime = Date.now();
+      // 只有在没有有效缓存时才创建进度条并进行分析
+      this.createProgressBar();
+      
+      // 在后台异步进行Java文件解析
+      this.performBackgroundAnalysis();
+      
+    } catch (error) {
+      logger.error(`加载endpoints失败: ${error.message}`, error);
+      throw new Error(`加载endpoints失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 创建进度条
+   */
+  createProgressBar() {
+    this.progressBar = blessed.progressbar({
+      parent: this.screen,
+      bottom: 0,
+      right: 0,
+      width: 30,
+      height: 3,
+      border: { type: 'line' },
+      style: {
+        border: { fg: 'cyan' },
+        bar: { bg: 'blue' }
+      },
+      filled: 0,
+      label: '解析进度',
+      tags: true
+    });
+    
+    this.progressText = blessed.text({
+      parent: this.screen,
+      bottom: 1,
+      right: 31,
+      width: 20,
+      height: 1,
+      content: '准备中...',
+      style: { fg: 'cyan' }
+    });
+  }
+
+  /**
+   * 后台异步分析
+   */
+  async performBackgroundAnalysis() {
+    try {
+      // 检查是否包含Java文件
+      const scanResult = await Scanner.scanJavaFiles(this.projectPath);
+      const { javaFiles, moduleInfo } = scanResult;
+      if (javaFiles.length === 0) {
+        this.updateInfo('当前目录未找到Java文件');
+        this.removeProgressBar();
+        return;
+      }
+
+      // 更新进度条 - 减少日志输出
+      this.updateProgress(10, '正在扫描...');
       
       const allJavaFiles = javaFiles;
+      this.moduleInfo = moduleInfo;
       
-      if (moduleInfo.isMultiModule) {
-        const springModuleCount = moduleInfo.modules.filter(m => m.hasSpringBoot).length;
-        this.updateInfo(`扫描完成，发现 ${moduleInfo.modules.length} 个模块（${springModuleCount} 个包含Spring），正在分析 ${allJavaFiles.length} 个Java文件...`);
-      } else {
-        this.updateInfo(`扫描完成，正在分析 ${allJavaFiles.length} 个Java文件...`);
-      }
+      // 异步分析端点
+      this.updateProgress(30, '分析中...');
+      const startTime = Date.now();
       
       const { endpoints, controllerCount } = await Analyzer.analyzeEndpoints(this.projectPath, moduleInfo);
       const duration = Date.now() - startTime;
       
-      // 保存模块信息供界面使用
-      this.moduleInfo = moduleInfo;
+      this.updateProgress(80, '保存中...');
       
       // 生成统计信息并保存索引
       const stats = {
@@ -301,11 +354,46 @@ class TUI {
       
       await IndexManager.saveIndex(this.projectPath, endpoints, stats);
       
+      this.updateProgress(100, '完成');
+      
+      // 更新端点列表
       this.endpoints = endpoints;
-      this.updateInfo(`分析完成，找到 ${endpoints.length} 个endpoints`);
+      this.updateList();
+      this.updateInfo(`已更新 ${endpoints.length} 个endpoints`);
+      
+      // 延迟移除进度条
+      setTimeout(() => {
+        this.removeProgressBar();
+      }, 800);
+      
     } catch (error) {
-      logger.error(`加载endpoints失败: ${error.message}`, error);
-      throw new Error(`加载endpoints失败: ${error.message}`);
+      logger.error(`后台分析失败: ${error.message}`, error);
+      this.updateInfo(`分析失败: ${error.message}`);
+      this.removeProgressBar();
+    }
+  }
+
+  /**
+   * 更新进度条
+   */
+  updateProgress(percent, message) {
+    if (this.progressBar) {
+      this.progressBar.setProgress(percent);
+      this.progressText.setContent(message);
+      this.screen.render();
+    }
+  }
+
+  /**
+   * 移除进度条
+   */
+  removeProgressBar() {
+    if (this.progressBar) {
+      this.screen.remove(this.progressBar);
+      this.screen.remove(this.progressText);
+      this.progressBar = null;
+      this.progressText = null;
+      this.screen.render();
     }
   }
 
@@ -601,6 +689,54 @@ class TUI {
     } catch (error) {
       this.showError(`重新扫描失败: ${error.message}`);
     }
+  }
+
+  /**
+   * 显示帮助信息
+   */
+  showHelp() {
+    const helpBox = blessed.box({
+      top: 'center',
+      left: 'center',
+      width: 60,
+      height: 20,
+      border: {
+        type: 'line'
+      },
+      style: {
+        border: { fg: 'cyan' },
+        fg: 'white'
+      },
+      tags: true,
+      content: '{center}{bold}JavaCLI 帮助信息{/bold}{/center}\n\n' +
+               '{bold}导航操作：{/bold}\n' +
+               '↑/↓ 或 j/k - 上下移动选择\n' +
+               'PgUp/PgDn - 翻页\n' +
+               'Home/End - 跳转到开头/结尾\n\n' +
+               '{bold}搜索过滤：{/bold}\n' +
+               '/ - 开始搜索\n' +
+               'm - 按模块过滤\n' +
+               'c - 清除所有过滤\n\n' +
+               '{bold}查看信息：{/bold}\n' +
+               'Enter 或 Space - 查看endpoint详情\n' +
+               'Esc 或 q - 返回列表/退出\n\n' +
+               '{bold}其他操作：{/bold}\n' +
+               'r - 重新扫描项目\n' +
+               'h - 显示此帮助信息\n\n' +
+               '{bold}快捷键：{/bold}\n' +
+               'Ctrl+C - 强制退出\n\n' +
+               '按任意键关闭此帮助...'
+    });
+
+    this.screen.append(helpBox);
+    helpBox.focus();
+    this.screen.render();
+
+    helpBox.once('keypress', () => {
+      this.screen.remove(helpBox);
+      this.listBox.focus();
+      this.screen.render();
+    });
   }
 
   /**

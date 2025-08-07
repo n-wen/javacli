@@ -171,7 +171,7 @@ class IndexManager {
                 if (err) {
                   reject(new Error(`关闭数据库失败: ${err.message}`));
                 } else {
-                  console.log(`索引已保存到: ${dbPath} (${endpoints.length}个endpoints)`);
+                  // 索引保存成功，静默处理
                   resolve();
                 }
               });
@@ -334,7 +334,7 @@ class IndexManager {
               if (err) {
                 reject(new Error(`清空endpoints表失败: ${err.message}`));
               } else {
-                console.log(`索引数据已清空: ${dbPath}`);
+                // 索引数据已清空，静默处理
                 resolve();
               }
             });
@@ -359,7 +359,7 @@ class IndexManager {
     const dbPath = this.getIndexFilePath(projectPath);
     if (fs.existsSync(dbPath)) {
       fs.unlinkSync(dbPath);
-      console.log(`索引文件已删除: ${dbPath}`);
+      // 索引文件已删除，静默处理
     }
   }
 }

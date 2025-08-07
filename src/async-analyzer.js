@@ -419,9 +419,7 @@ class AsyncAnalyzer {
 
       // 添加文件到队列
       const enqueued = await this.enqueueFiles(db, javaFiles, moduleInfo);
-      if (process.env.NODE_ENV !== 'test') {
-        console.log(`已添加 ${enqueued} 个文件到分析队列`);
-      }
+      // 文件队列准备完成，静默处理
       
       // 处理任务
       const endpoints = await this.processTasksAsync(db);
@@ -444,7 +442,7 @@ class AsyncAnalyzer {
     let processed = 0;
     const concurrency = Math.min(8, Math.max(2, this.maxWorkers * 2));
 
-    console.log(`使用 ${concurrency} 个并发工作进程...`);
+    // 并发配置完成，静默处理
 
     while (true) {
       const tasks = await this.getPendingTasks(db, concurrency);
@@ -479,9 +477,7 @@ class AsyncAnalyzer {
       
       processed += tasks.length;
       
-      if (processed % Math.min(10, concurrency) === 0) {
-        console.log(`已处理 ${processed} 个文件...`);
-      }
+      // 处理进度更新，静默处理
     }
 
     return allEndpoints;
