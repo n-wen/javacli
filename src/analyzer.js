@@ -1,5 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
+const Scanner = require('./scanner');
+const logger = require('./logger');
 
 /**
  * 表示一个HTTP endpoint
@@ -19,30 +22,42 @@ class Endpoint {
 
 /**
  * 分析Java文件中的endpoints（支持模块信息）
- * @param {string[]} javaFiles Java文件路径数组
- * @param {Object} moduleInfo 模块信息
+ * @param {string} projectPath 项目路径
+ * @param {Object} options 分析选项
+ * @param {boolean} options.useAsync 是否使用异步分析器
+ * @param {boolean} options.useOptimized 是否使用优化分析器
  * @returns {Promise<{endpoints: Endpoint[], controllerCount: number}>} 分析结果
  */
-async function analyzeEndpoints(javaFiles, moduleInfo = null) {
-  const endpoints = [];
-  let controllerCount = 0;
+async function analyzeEndpoints(projectPath, moduleInfo = null, options = {}) {
+  const { useAsync = false, useOptimized = false } = options;
 
-  for (const filePath of javaFiles) {
-    try {
-      // 确定文件所属的模块
-      const moduleName = getModuleForFile(filePath, moduleInfo);
-      const { endpoints: fileEndpoints, isController } = await analyzeJavaFile(filePath, moduleName);
-      endpoints.push(...fileEndpoints);
-      if (isController) {
-        controllerCount++;
-      }
-    } catch (error) {
-      // 忽略单个文件的分析错误，继续处理其他文件
-      console.warn(`警告：分析文件 ${filePath} 失败: ${error.message}`);
+  try {
+    // 确保路径是绝对路径
+    const absolutePath = path.resolve(projectPath);
+    console.log(`分析路径: ${absolutePath}`);
+
+    if (useAsync) {
+      // 使用异步分析器
+      const { AsyncAnalyzer } = require('./async-analyzer');
+      const asyncAnalyzer = new AsyncAnalyzer();
+      return await asyncAnalyzer.analyzeEndpointsAsync(absolutePath);
     }
-  }
 
-  return { endpoints, controllerCount };
+    // 默认使用优化分析器
+    const OptimizedAnalyzer = require('./optimized-analyzer');
+    try {
+      const analyzer = new OptimizedAnalyzer();
+      const result = await analyzer.analyzeEndpoints(absolutePath);
+      
+      console.log(`总共找到 ${result.endpoints.length} 个端点`);
+      return result;
+    } catch (error) {
+      logger.error(`端点分析失败: ${error.message}`, error);
+      throw error;
+    }
+  } catch (error) {
+    throw new Error(`分析端点失败: ${error.message}`);
+  }
 }
 
 /**
@@ -78,7 +93,66 @@ function getModuleForFile(filePath, moduleInfo) {
  * @param {string|null} moduleName 模块名称
  * @returns {Promise<{endpoints: Endpoint[], isController: boolean}>} 分析结果
  */
-async function analyzeJavaFile(filePath, moduleName = null) {
+async function analyzeJavaFile(filePath, moduleName = '') {
+  const endpoints = [];
+  
+  try {
+    // 使用JavaParserWrapper通过子进程获取endpoint信息
+    const javaParserPath = path.join(__dirname, 'JavaParserWrapper.jar');
+    const projectRoot = path.dirname(filePath);
+    const command = `java -jar "${javaParserPath}" "${filePath}" "${projectRoot}"`;
+    
+    let output;
+    try {
+      output = execSync(command, { encoding: 'utf8' });
+      
+      // 检查输出是否为空
+      if (!output || output.trim() === '') {
+        console.warn(`JavaParser输出为空，使用正则表达式解析`);
+        return analyzeJavaFileFallback(filePath, moduleName);
+      }
+    } catch (error) {
+      // 如果JavaParser不可用，回退到正则表达式解析
+      console.warn(`JavaParser不可用，使用正则表达式解析: ${error.message}`);
+      return analyzeJavaFileFallback(filePath, moduleName);
+    }
+    
+    console.log(`JavaParser输出: ${output.substring(0, 200)}...`);
+
+    let parsedEndpoints;
+    try {
+      // 清理可能的格式问题
+      const cleanOutput = output.trim();
+      parsedEndpoints = JSON.parse(cleanOutput);
+    } catch (error) {
+      console.warn(`解析JavaParser输出失败: ${error.message}，回退到正则表达式`);
+      return analyzeJavaFileFallback(filePath, moduleName);
+    }
+
+    // 转换JavaParser输出为Endpoint对象
+    for (const ep of parsedEndpoints) {
+      const endpoint = new Endpoint(
+        ep.httpMethod,
+        ep.path,
+        ep.className,
+        ep.methodName,
+        filePath,
+        1, // JavaParser没有提供行号，暂时使用1
+        [], // JavaParser没有提供参数信息，暂时为空
+        moduleName
+      );
+      endpoints.push(endpoint);
+    }
+
+    return { endpoints, isController: parsedEndpoints.length > 0 };
+  } catch (error) {
+    console.warn(`使用JavaParser解析失败: ${error.message}，回退到正则表达式`);
+    return analyzeJavaFileFallback(filePath, moduleName);
+  }
+}
+
+// 回退到正则表达式解析
+function analyzeJavaFileFallback(filePath, moduleName = '') {
   const endpoints = [];
   
   try {
@@ -88,137 +162,76 @@ async function analyzeJavaFile(filePath, moduleName = null) {
     let currentClass = '';
     let classBasePath = '';
     let isController = false;
+    let lineNumber = 0;
     
-    // 正则表达式模式
+    // 简化的正则表达式模式，专注于Spring注解
     const classPattern = /class\s+(\w+)/;
     const controllerPattern = /@(RestController|Controller)/;
-    const requestMappingPattern = /@RequestMapping\s*\([^)]*["']([^"']*)["'][^)]*\)|@RequestMapping\s*\(\s*["']([^"']*)["']\s*\)|@RequestMapping\s*\(\s*\)|@RequestMapping\s*\([^)]*\w+(?:\.\w+)*[^)]*\)/;
-    const mappingPattern = /@(Get|Post|Put|Delete|Patch)Mapping\s*(?:\([^)]*["']([^"']*)["'][^)]*\)|\(\s*["']([^"']*)["']\s*\)|\(\s*\)|\([^)]*\w+(?:\.\w+)*[^)]*\)|$)/;
-    const methodPattern = /(public|private|protected)?\s*(?:\w+(?:<[^>]*>)?(?:\[\])*\s+)*(\w+)\s*\(([^)]*)\)/;
-
+    const requestMappingPattern = /@RequestMapping\s*\(\s*["']([^"]*)["']\s*\)/;
+    const mappingPattern = /@(Get|Post|Put|Delete|Patch)Mapping\s*\(\s*["']([^"]*)["']\s*\)/;
+    
+    console.log(`正在分析文件: ${filePath}`);
+    
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const trimmedLine = line.trim();
-
-      // 检查是否是控制器类
-      if (controllerPattern.test(trimmedLine)) {
-        isController = true;
-        continue;
-      }
 
       // 提取类名
       const classMatch = classPattern.exec(trimmedLine);
       if (classMatch) {
         currentClass = classMatch[1];
-        continue;
+        console.log(`找到类: ${currentClass}`);
+      }
+
+      // 检查是否是控制器类
+      if (controllerPattern.test(trimmedLine)) {
+        isController = true;
+        console.log(`找到控制器注解: ${trimmedLine}`);
       }
 
       // 提取类级别的RequestMapping路径
       const requestMappingMatch = requestMappingPattern.exec(trimmedLine);
       if (requestMappingMatch) {
-        const pathValue = requestMappingMatch[1] || requestMappingMatch[2] || '';
-        if (pathValue) {
-          classBasePath = pathValue;
-        } else {
-          // 处理变量引用的情况，保留原始表达式
-          const variableMatch = /@RequestMapping\s*\(\s*([^)"']+)\s*\)/.exec(trimmedLine);
-          if (variableMatch) {
-            classBasePath = `{${variableMatch[1].trim()}}`;
-          } else {
-            classBasePath = '';
-          }
-        }
-        continue;
-      }
-
-      // 只在控制器类中查找mapping注解
-      if (!isController) {
-        continue;
+        classBasePath = requestMappingMatch[1];
+        console.log(`找到类级路径: ${classBasePath}`);
       }
 
       // 检查方法级别的mapping注解
       const mappingMatch = mappingPattern.exec(trimmedLine);
-      if (mappingMatch) {
+      if (mappingMatch && isController) {
         const httpMethod = mappingMatch[1].toUpperCase();
-        let methodPath = mappingMatch[2] || mappingMatch[3] || '';
-        
-        // 如果没有匹配到字符串，检查是否是变量引用
-        if (!methodPath) {
-          const variableMatch = /@(?:Get|Post|Put|Delete|Patch)Mapping\s*\(\s*([^)"']+)\s*\)/.exec(trimmedLine);
-          if (variableMatch) {
-            methodPath = `{${variableMatch[1].trim()}}`;
-          }
-        }
+        const methodPath = mappingMatch[2] || '';
+        console.log(`找到方法映射: ${httpMethod} ${methodPath}`);
 
-        // 查找方法定义
+        // 查找方法定义（可能在下一行）
         let methodName = '';
-        let parameters = [];
-        
-        // 从mapping注解后的行开始查找方法定义
         for (let j = i + 1; j < Math.min(lines.length, i + 3); j++) {
-          const line = lines[j].trim();
-          if (!line || line.startsWith('@') || line.startsWith('//') || line.startsWith('/*')) continue;
-          
-          // 直接匹配方法定义：public/private/protected 返回类型 方法名(参数)
-          const methodMatch = /(?:public|private|protected)?\s+(?:\w+(?:<[^>]*>)?(?:\[\])?\s+)*(\w+)\s*\(/.exec(line);
+          const methodLine = lines[j].trim();
+          const methodMatch = /(?:public|private|protected)?\s+(?:\w+\s+)*(\w+)\s*\(/.exec(methodLine);
           if (methodMatch) {
             methodName = methodMatch[1];
-            
-            // 提取参数部分
-            const paramStart = line.indexOf('(');
-            const paramEnd = line.lastIndexOf(')');
-            if (paramStart !== -1 && paramEnd !== -1 && paramEnd > paramStart) {
-              // 参数在同一行
-              const paramStr = line.substring(paramStart + 1, paramEnd);
-              parameters = parseParameters(paramStr);
-            } else {
-              // 处理多行参数情况
-              let paramStr = '';
-              let parenCount = 1;
-              
-              // 从当前行的左括号后开始收集参数
-              paramStr += line.substring(paramStart + 1);
-              
-              for (let k = j + 1; k < lines.length && parenCount > 0; k++) {
-                const nextLine = lines[k].trim();
-                const openCount = (nextLine.match(/\(/g) || []).length;
-                const closeCount = (nextLine.match(/\)/g) || []).length;
-                parenCount += openCount - closeCount;
-                
-                if (parenCount > 0) {
-                  paramStr += ' ' + nextLine;
-                } else {
-                  const closeIndex = nextLine.lastIndexOf(')');
-                  if (closeIndex > 0) {
-                    paramStr += ' ' + nextLine.substring(0, closeIndex);
-                  }
-                  break;
-                }
-              }
-              parameters = parseParameters(paramStr);
-            }
             break;
           }
         }
 
-        // 构建完整路径
-        const fullPath = buildFullPath(classBasePath, methodPath);
-
-        const endpoint = new Endpoint(
-          httpMethod,
-          fullPath,
-          currentClass,
-          methodName,
-          filePath,
-          i + 1, // mapping注解的行号（1-based）
-          parameters,
-          moduleName // 包含模块信息
-        );
-
-        endpoints.push(endpoint);
+        if (methodName) {
+          const fullPath = buildFullPath(classBasePath, methodPath);
+          console.log(`创建端点: ${httpMethod} ${fullPath} 在类 ${currentClass}`);
+          endpoints.push(new Endpoint(
+            httpMethod,
+            fullPath,
+            currentClass,
+            methodName,
+            filePath,
+            i + 1,
+            [],
+            moduleName
+          ));
+        }
       }
     }
 
+    console.log(`文件 ${filePath} 分析完成，找到 ${endpoints.length} 个端点`);
     return { endpoints, isController };
   } catch (error) {
     throw new Error(`读取文件失败: ${error.message}`);

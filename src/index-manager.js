@@ -343,6 +343,25 @@ class IndexManager {
       });
     });
   }
+
+  /**
+   * 检查索引文件是否存在
+   */
+  static indexExists(projectPath) {
+    const dbPath = this.getIndexFilePath(projectPath);
+    return fs.existsSync(dbPath);
+  }
+
+  /**
+   * 删除索引文件
+   */
+  static deleteIndex(projectPath) {
+    const dbPath = this.getIndexFilePath(projectPath);
+    if (fs.existsSync(dbPath)) {
+      fs.unlinkSync(dbPath);
+      console.log(`索引文件已删除: ${dbPath}`);
+    }
+  }
 }
 
 module.exports = IndexManager;

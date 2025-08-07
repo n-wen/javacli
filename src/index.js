@@ -4,6 +4,9 @@
 const { setupEncoding } = require('./encoding-fix');
 setupEncoding();
 
+// 错误日志
+const logger = require('./logger');
+
 const { Command } = require('commander');
 const path = require('path');
 const fs = require('fs');
@@ -31,6 +34,7 @@ program
   .option('-f, --force', '强制重新扫描，忽略缓存')
   .option('-n, --native', '使用轻量级原生UI (性能更好)')
   .option('-s, --simple', '使用超简单菜单界面 (最稳定)')
+  .option('--async', '使用异步分析器（大量文件时性能更好）')
   .action(async (options) => {
     // 设置全局变量
     projectPath = options.path || process.cwd();
@@ -62,20 +66,22 @@ program
       if (useSimpleUI) {
         // 使用超简单菜单界面
         const SimpleUI = require('./simple-ui');
-        const simpleUI = new SimpleUI(projectPath);
+        const simpleUI = new SimpleUI(projectPath, { useAsync: options.async });
         await simpleUI.run();
       } else if (useNativeUI) {
         // 使用原生轻量级TUI
         const NativeUI = require('./native-ui');
-        const nativeUI = new NativeUI(projectPath);
+        const nativeUI = new NativeUI(projectPath, { useAsync: options.async });
         await nativeUI.run();
       } else {
         // 使用主TUI界面
-        const tui = new TUI(projectPath, { verbose });
+        const tui = new TUI(projectPath, { verbose, useAsync: options.async });
         await tui.start();
       }
     } catch (error) {
+      logger.error(`启动失败: ${error.message}`, error);
       console.error(chalk.red(`错误：${error.message}`));
+      console.error(chalk.gray(`详细日志已保存到: ${logger.getLogPath()}`));
       process.exit(1);
     }
   });

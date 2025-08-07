@@ -3,6 +3,7 @@ const chalk = require('chalk');
 const Scanner = require('./scanner');
 const Analyzer = require('./analyzer');
 const IndexManager = require('./index-manager');
+const logger = require('./logger');
 
 /**
  * TUI界面类
@@ -242,6 +243,7 @@ class TUI {
       this.updateList();
       this.screen.render();
     } catch (error) {
+      logger.error(`TUI启动失败: ${error.message}`, error);
       this.showError(`启动失败: ${error.message}`);
     }
   }
@@ -282,7 +284,7 @@ class TUI {
         this.updateInfo(`扫描完成，正在分析 ${allJavaFiles.length} 个Java文件...`);
       }
       
-      const { endpoints, controllerCount } = await Analyzer.analyzeEndpoints(allJavaFiles, moduleInfo);
+      const { endpoints, controllerCount } = await Analyzer.analyzeEndpoints(this.projectPath, moduleInfo);
       const duration = Date.now() - startTime;
       
       // 保存模块信息供界面使用
@@ -302,6 +304,7 @@ class TUI {
       this.endpoints = endpoints;
       this.updateInfo(`分析完成，找到 ${endpoints.length} 个endpoints`);
     } catch (error) {
+      logger.error(`加载endpoints失败: ${error.message}`, error);
       throw new Error(`加载endpoints失败: ${error.message}`);
     }
   }
@@ -313,7 +316,7 @@ class TUI {
     try {
       return await IndexManager.loadIndex(this.projectPath);
     } catch (error) {
-      console.warn(`从缓存加载失败: ${error.message}`);
+      logger.warn(`从缓存加载失败: ${error.message}`, error);
       return [];
     }
   }
