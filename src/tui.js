@@ -10,7 +10,9 @@ const logger = require('./logger');
  */
 class TUI {
   constructor(projectPath, options = {}) {
-    this.projectPath = projectPath;
+    // 确保使用绝对路径，与IndexManager保持一致
+    const path = require('path');
+    this.projectPath = path.resolve(projectPath);
     this.verbose = options.verbose || false;
     this.endpoints = [];
     this.filteredEndpoints = [];
@@ -268,7 +270,11 @@ class TUI {
           
           // 缓存有效，直接返回，不再进行后台分析
           return;
+        } else {
+          this.updateInfo('缓存已过期，需要重新分析...');
         }
+      } else {
+        this.updateInfo('未找到索引文件，开始分析...');
       }
 
       // 只有在没有有效缓存时才创建进度条并进行分析
@@ -279,7 +285,9 @@ class TUI {
       
     } catch (error) {
       logger.error(`加载endpoints失败: ${error.message}`, error);
-      throw new Error(`加载endpoints失败: ${error.message}`);
+      this.updateInfo(`加载失败: ${error.message}`);
+      this.updateList();
+      this.screen.render();
     }
   }
 

@@ -8,7 +8,8 @@ const IndexManager = require('./index-manager');
  */
 class NativeUI {
   constructor(options = {}) {
-    this.projectPath = options.projectPath || process.cwd();
+    const path = require('path');
+    this.projectPath = path.resolve(options.projectPath || process.cwd());
     this.verbose = options.verbose || false;
   }
 

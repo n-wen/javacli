@@ -8,7 +8,8 @@ const IndexManager = require('./index-manager');
  */
 class SimpleUI {
   constructor(projectPath, options = {}) {
-    this.projectPath = projectPath;
+    const path = require('path');
+    this.projectPath = path.resolve(projectPath);
     this.endpoints = [];
     this.useAsync = options.useAsync || false;
   }

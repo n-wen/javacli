@@ -110,10 +110,12 @@ class IndexManager {
    */
   static async saveIndex(projectPath, endpoints, stats) {
     try {
-      this.ensureIndexDir(projectPath);
+      // 使用绝对路径确保一致性
+      const absoluteProjectPath = path.resolve(projectPath);
+      this.ensureIndexDir(absoluteProjectPath);
       
-      const projectHash = await this.generateProjectHash(projectPath);
-      const dbPath = this.getIndexFilePath(projectPath);
+      const projectHash = await this.generateProjectHash(absoluteProjectPath);
+      const dbPath = this.getIndexFilePath(absoluteProjectPath);
       
       return new Promise((resolve, reject) => {
         const db = new sqlite3.Database(dbPath, async (err) => {
@@ -137,7 +139,7 @@ class IndexManager {
 
               insertMetadata.run(
                 INDEX_VERSION,
-                projectPath,
+                absoluteProjectPath,
                 new Date().toISOString(),
                 projectHash,
                 stats.totalEndpoints,
